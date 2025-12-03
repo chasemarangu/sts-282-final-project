@@ -128,11 +128,11 @@ Code based on https://threejs.org/examples/
 			let fieldLinesRecomputeFrameSkip = 10;
 			// fieldLinesRecomputePerFrame 10 ---> only compute
 			// up to 10 field lines at a time
-			let fieldLinesRecomputePerFrame = 50 // Try 10 or 300 (up to (fieldLinesGridWidth**3)*2)
+			let fieldLinesRecomputePerFrame = 20 // Try 10 or 300 (up to (fieldLinesGridWidth**3)*2)
 			let fieldLinesRecompute_currentIndex = 0
 			
 			// fieldLinesGridWidth==10 ---> 1000 total field lines
-			let fieldLinesGridWidth = 6 // 3, 4, or 6 (or 11 if fieldLinesRecomputePerFrame is set to a small value)
+			let fieldLinesGridWidth = 7 // 3, 4, or 6 (or 11 if fieldLinesRecomputePerFrame is set to a small value)
 			// optional: "jitter" the spawn points of the field lines
 			let fieldLinesGridUseJitter = true
 			
@@ -178,6 +178,8 @@ Code based on https://threejs.org/examples/
 			
 			function initGUI () {
 				params = {
+					"fieldToGraph": 0,
+					
 					addPositivePointCharge: function() {
 						charges.push(createPointCharge(
 							new THREE.Vector3(0, 0, 0),
@@ -240,14 +242,20 @@ Code based on https://threejs.org/examples/
 					},
 					removeAllChargesAndCurrents: removeAllChargesAndCurrents
 				}
+				params.fieldToGraph = fieldToGraph == E ? 0 : 1;
+				gui.add( params, "fieldToGraph", {"Electric Field":0, "Magnetic field":1}).onChange(function(){
+					fieldToGraph = params.fieldToGraph ? B : E;
+					fieldLinesNeedRecompute = true;
+					fieldLinesRecompute_currentIndex = 0;
+				})
 				gui.add(params, 'addPositivePointCharge').name('Add positive point charge')
 				gui.add(params, 'addNegativePointCharge').name('Add negative point charge')
 				gui.add(params, 'addPositiveLineSegmentCharge').name('Add positive line segment charge')
 				gui.add(params, 'addNegativeLineSegmentCharge').name('Add negative line segment charge')
 				gui.add(params, 'addPositiveInfiniteLineCurrent').name('Add positive infinite wire current')
 				gui.add(params, 'addNegativeInfiniteLineCurrent').name('Add negative infinite wire current')
-				gui.add(params, 'addRingCurrent', 'Add CCW ring current')
-				gui.add(params, 'addCWRingCurrent', 'Add CW ring current')
+				gui.add(params, 'addRingCurrent').name('Add CCW ring current')
+				gui.add(params, 'addCWRingCurrent').name('Add CW ring current')
 				gui.add(params, 'removeAllChargesAndCurrents').name('Reset scene')
 			}
 			
@@ -289,21 +297,21 @@ Code based on https://threejs.org/examples/
 					}
 				}
 				
-// 				charges.push(createPointCharge(
-// 					new THREE.Vector3(3, 0, 0),
-// 					1
-// 				))
+				charges.push(createPointCharge(
+					new THREE.Vector3(3, 0, 0),
+					1
+				))
 				
 // 				charges.push(createPointCharge(
 // 					new THREE.Vector3(-3, 0, 0),
 // 					-1
 // 				))
 				
-// 				charges.push(createLineSegmentCharge(
-// 					new THREE.Vector3(0, 1, 0),
-// 					new THREE.Vector3(3, 1, 0),
-// 					1
-// 				))
+				// charges.push(createLineSegmentCharge(
+				// 	new THREE.Vector3(0, 1, 0),
+				// 	new THREE.Vector3(3, 1, 0),
+				// 	1
+				// ))
 				
 // 				charges.push(createLineSegmentCharge(
 // 					new THREE.Vector3(0, 1, 2),
@@ -311,23 +319,28 @@ Code based on https://threejs.org/examples/
 // 					-1
 // 				))
 				
-				// currents.push(createInfiniteLineCurrent(
-				// 	new THREE.Vector3(1, 2, 0),
-				// 	1 // Amps
-				// ))
-				// currents.push(createInfiniteLineCurrent(
-				// 	new THREE.Vector3(0, 3, 0),
-				// 	1 // Amps
-				// ))
-				// currents.push(createInfiniteLineCurrent(
-				// 	new THREE.Vector3(0, 4, 0),
-				// 	-1 // Amps
-				// ))
+				currents.push(createInfiniteLineCurrent(
+					new THREE.Vector3(3, 2, 0),
+					-1 // Amps
+				))
+				currents.push(createApproximateRingCurrent(
+					new THREE.Vector3(0, 0, -1),
+					2.0,
+					1
+				))
+				
 				currents.push(createApproximateRingCurrent(
 					new THREE.Vector3(0, 0, 0),
 					2.0,
 					1
 				))
+				
+				currents.push(createApproximateRingCurrent(
+					new THREE.Vector3(0, 0, 1),
+					2.0,
+					1
+				))
+				
 			}
 			
 			function removeAllChargesAndCurrents () {
@@ -378,12 +391,12 @@ Code based on https://threejs.org/examples/
 				// http://hyperphysics.phy-astr.gsu.edu/hbase/electric/potlin.html#c1
 				// ∫ k⋅dq/r = kλ⋅ln( b+sqrt(b²+d²) / -a+sqrt(a²+d²) )
 				// where x1, x2 are the x-coords of the line segment inside the x-axis,
-				// d=sy²+sz², b=s.x-x2, -a=(s.x-x1)
+				// d=sy²+sz², b=-(s.x-x2), -a=-(s.x-x1)
 				let theDistSquared = (s.y-p1.y)**2 + (s.z-p1.z)**2
 				let x1 = p1.x
 				let x2 = p2.x
-				let b = s.x - x2
-				let a = -(s.x - x1)
+				let b = -(s.x - x2)
+				let a = +(s.x - x1)
 				return coulombK * chargeDensity * (
 					log(  b + sqrt(b*b + theDistSquared) ) -
 					log( -a + sqrt(a*a + theDistSquared) )
@@ -887,7 +900,7 @@ Code based on https://threejs.org/examples/
 				
 				// z-position of camera <0 means that +x is right, +y is up,
 				// and +z is towards the viewer
-				camera.position.set(0, 5, +10)
+				camera.position.set(-10, 5, 3)
 				camera.position.multiplyScalar( sceneW/10 )
 				
 				
