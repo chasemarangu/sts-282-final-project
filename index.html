@@ -432,18 +432,19 @@ Code based on https://threejs.org/examples/
 						for (let j=0; j<segs; ++j) {
 							let theta = j/segs * 2.*PI;
 							let theta2 = (j+1)/segs * 2.*PI;
+							let ringRadius = currents[i].radius;
 							// Sum
 							// I dp cross rHat/r^2
 							let pCenter = currents[i].mesh.position;
 							let p = new THREE.Vector3(
-								cos(theta),
-								sin(theta),
+								cos(theta) * ringRadius,
+								sin(theta) * ringRadius,
 								0
 							); p.add(pCenter)
 							
 							let deltaP = new THREE.Vector3(
-								cos(theta2) - cos(theta),
-								sin(theta2) - sin(theta),
+								cos(theta2) * ringRadius - cos(theta) * ringRadius,
+								sin(theta2) * ringRadius - sin(theta) * ringRadius,
 								0
 							)
 							let r = (s.x - p.x)**2 + (s.y - p.y)**2 + (s.z - p.z)**2;
@@ -599,6 +600,7 @@ Code based on https://threejs.org/examples/
 				mesh.position.set(p.x, p.y, p.z)
 				return {
 					type: "ring",
+					radius: r,
 					current: current,
 					mesh: mesh,
 					transformControls: createTransformControls(mesh)
