@@ -112,8 +112,8 @@ Code based on https://threejs.org/examples/
 			let fieldLinesMaxY = sceneW;
 			
 			
-			const fieldLineStepSize = 0.2; // 1.0 or 0.4 or 0.2
-			const fieldLineMaxVertices = 100 * 10 // try 50 or 100 (or 1000 if fieldLinesMaxX etc. are set)
+			const fieldLineStepSize = 0.1; // 1.0 or 0.4 or 0.2
+			const fieldLineMaxVertices = 100 // try 50 or 100 (or 1000 if fieldLinesMaxX etc. are set)
 			// optional: render the last vertex and last line segment of field lines
 			// for aesthetics
 			let fieldLinesRenderLastVertex = true;
@@ -128,7 +128,7 @@ Code based on https://threejs.org/examples/
 			let fieldLinesRecomputeFrameSkip = 10;
 			// fieldLinesRecomputePerFrame 10 ---> only compute
 			// up to 10 field lines at a time
-			let fieldLinesRecomputePerFrame = 500 // Try 10 or 300 (up to (fieldLinesGridWidth**3)*2)
+			let fieldLinesRecomputePerFrame = 50 // Try 10 or 300 (up to (fieldLinesGridWidth**3)*2)
 			let fieldLinesRecompute_currentIndex = 0
 			
 			// fieldLinesGridWidth==10 ---> 1000 total field lines
@@ -143,7 +143,7 @@ Code based on https://threejs.org/examples/
 			
 			// Must be either E, B, or some other vector field.
 			// Choosing anything else will cause errors
-			let fieldToGraph = E
+			let fieldToGraph = B
 			
 			let renderPointRadius = 0.1;
 			let renderWireChargeRadius  = renderPointRadius * 2/5;
@@ -208,12 +208,46 @@ Code based on https://threejs.org/examples/
 						))
 						addChargesToScene()
 					},
+					addPositiveInfiniteLineCurrent: function () {
+						currents.push(createInfiniteLineCurrent(
+							new THREE.Vector3(0, 0, 0),
+							1 // Amps
+						))
+						addCurrentsToScene()
+					},
+					addNegativeInfiniteLineCurrent: function () {
+						currents.push(createInfiniteLineCurrent(
+							new THREE.Vector3(0, 0, 0),
+							-1 // Amps
+						))
+						addCurrentsToScene()
+					},
+					addRingCurrent: function () {
+						currents.push(createApproximateRingCurrent(
+							new THREE.Vector3(0, 0, 0),
+							2.0,
+							1
+						))
+						addCurrentsToScene()
+					},
+					addCWRingCurrent: function () {
+						currents.push(createApproximateRingCurrent(
+							new THREE.Vector3(0, 0, 0),
+							2.0,
+							-1
+						))
+						addCurrentsToScene()
+					},
 					removeAllChargesAndCurrents: removeAllChargesAndCurrents
 				}
 				gui.add(params, 'addPositivePointCharge').name('Add positive point charge')
 				gui.add(params, 'addNegativePointCharge').name('Add negative point charge')
 				gui.add(params, 'addPositiveLineSegmentCharge').name('Add positive line segment charge')
 				gui.add(params, 'addNegativeLineSegmentCharge').name('Add negative line segment charge')
+				gui.add(params, 'addPositiveInfiniteLineCurrent').name('Add positive infinite wire current')
+				gui.add(params, 'addNegativeInfiniteLineCurrent').name('Add negative infinite wire current')
+				gui.add(params, 'addRingCurrent', 'Add CCW ring current')
+				gui.add(params, 'addCWRingCurrent', 'Add CW ring current')
 				gui.add(params, 'removeAllChargesAndCurrents').name('Reset scene')
 			}
 			
@@ -255,27 +289,27 @@ Code based on https://threejs.org/examples/
 					}
 				}
 				
-				charges.push(createPointCharge(
-					new THREE.Vector3(3, 0, 0),
-					1
-				))
+// 				charges.push(createPointCharge(
+// 					new THREE.Vector3(3, 0, 0),
+// 					1
+// 				))
 				
-				charges.push(createPointCharge(
-					new THREE.Vector3(-3, 0, 0),
-					-1
-				))
+// 				charges.push(createPointCharge(
+// 					new THREE.Vector3(-3, 0, 0),
+// 					-1
+// 				))
 				
-				charges.push(createLineSegmentCharge(
-					new THREE.Vector3(0, 1, 0),
-					new THREE.Vector3(3, 1, 0),
-					1
-				))
+// 				charges.push(createLineSegmentCharge(
+// 					new THREE.Vector3(0, 1, 0),
+// 					new THREE.Vector3(3, 1, 0),
+// 					1
+// 				))
 				
-				charges.push(createLineSegmentCharge(
-					new THREE.Vector3(0, 1, 2),
-					new THREE.Vector3(3, 1, 2),
-					-1
-				))
+// 				charges.push(createLineSegmentCharge(
+// 					new THREE.Vector3(0, 1, 2),
+// 					new THREE.Vector3(3, 1, 2),
+// 					-1
+// 				))
 				
 				// currents.push(createInfiniteLineCurrent(
 				// 	new THREE.Vector3(1, 2, 0),
@@ -289,6 +323,11 @@ Code based on https://threejs.org/examples/
 				// 	new THREE.Vector3(0, 4, 0),
 				// 	-1 // Amps
 				// ))
+				currents.push(createApproximateRingCurrent(
+					new THREE.Vector3(0, 0, 0),
+					2.0,
+					1
+				))
 			}
 			
 			function removeAllChargesAndCurrents () {
@@ -363,30 +402,63 @@ Code based on https://threejs.org/examples/
 				}
 				Btotal.set(0, 0, 0)
 				for (let i=0; i<currents.length; ++i) {
-						if (currents[i].type == "line +z") {
-							let p = currents[i].mesh.position
-							// let pClosest = new THREE.Vector3(
-							// 	p.x, p.y, s.z
-							// )
-							let r = (s.x - p.x)**2 + (s.y - p.y)**2;
-							let rHat = new THREE.Vector3(
-								(s.x - p.x)/r,
-								(s.y - p.y)/r,
+					if (currents[i].type == "line +z") {
+						let p = currents[i].mesh.position
+						// let pClosest = new THREE.Vector3(
+						// 	p.x, p.y, s.z
+						// )
+						let r = (s.x - p.x)**2 + (s.y - p.y)**2;
+						let rHat = new THREE.Vector3(
+							(s.x - p.x)/r,
+							(s.y - p.y)/r,
+							0
+						)
+
+
+						let zHat = new THREE.Vector3(0, 0, 1)
+						// .crossVectors() stores in-place
+						// .cross() creates a new THREE.Vector3
+						let Bhat = zHat.cross(rHat)
+
+						// B = mu0 * I/(2πr) * Bhat
+						Btotal.addScaledVector(
+							Bhat,
+							currents[i].current
+						)
+					}
+					else if (currents[i].type == "ring") {
+						
+						let segs = 30.;
+						for (let j=0; j<segs; ++j) {
+							let theta = j/segs * 2.*PI;
+							let theta2 = (j+1)/segs * 2.*PI;
+							// Sum
+							// I dp cross rHat/r^2
+							let pCenter = currents[i].mesh.position;
+							let p = new THREE.Vector3(
+								cos(theta),
+								sin(theta),
+								0
+							); p.add(pCenter)
+							
+							let deltaP = new THREE.Vector3(
+								cos(theta2) - cos(theta),
+								sin(theta2) - sin(theta),
 								0
 							)
-							
-							
-							let zHat = new THREE.Vector3(0, 0, 1)
-							// .crossVectors() stores in-place
-							// .cross() creates a new THREE.Vector3
-							let Bhat = zHat.cross(rHat)
-							
-							// B = mu0 * I/(2πr) * Bhat
+							let r = (s.x - p.x)**2 + (s.y - p.y)**2 + (s.z - p.z)**2;
+							let rDenom = abs(r) > divisionByZeroThreshold ? (1./r) : divisionByZeroThreshold;
+							let rHat = new THREE.Vector3(
+								(s.x - p.x)*rDenom,
+								(s.y - p.y)*rDenom,
+								(s.z - p.z)*rDenom
+							)
 							Btotal.addScaledVector(
-								Bhat,
-								currents[i].current
+								deltaP.cross(rHat),
+								currents[i].current*rDenom*rDenom
 							)
 						}
+					}
 				}
 				// Btotal.add(new THREE.Vector3(s.x, s.y, s.z))
 				// Btotal.set(s.x, s.y, s.z)
@@ -513,6 +585,20 @@ Code based on https://threejs.org/examples/
 				mesh.position.set( p.x, p.y, p.z )
 				return {
 					type: "line +z",
+					current: current,
+					mesh: mesh,
+					transformControls: createTransformControls(mesh)
+				}
+			}
+			
+			
+			// for now, only CCW relative to +z axis
+			function createApproximateRingCurrent (p, r, current) {
+				let geometry = new THREE.TorusGeometry(r, 0.05, 8, 20);
+				let mesh = new THREE.Mesh(geometry, electronMaterial)
+				mesh.position.set(p.x, p.y, p.z)
+				return {
+					type: "ring",
 					current: current,
 					mesh: mesh,
 					transformControls: createTransformControls(mesh)
