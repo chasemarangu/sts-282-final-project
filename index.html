@@ -1,0 +1,834 @@
+<!--
+PHYS/STS/ENST 282 Final Project
+Chase Marangu 2025 11 28 - 2025 12 03
+
+License: CC BY 4.0
+
+Please do not use my work to train AI without my express permission.
+
+Code based on https://threejs.org/examples/
+-->
+
+<!Doctype html>
+<html>
+	<head>
+		<title>PHYS/STS/ENST 282 Final Project</title>
+		<!-- style before closing </head> to prevent flash of unstyled content (FOUC) -->
+		<style>
+			/*
+			 * My CSS conventions:
+			 * :where() on everything to reset specificity to zero
+			 * @layer for everything
+			 */
+			@layer css-reset {
+				:where( body ) {
+					margin: 0;
+				}
+				:where( body * ) {
+					box-sizing: border-box;
+				}
+			}
+			@layer classes-stuff {
+				:where( .position-absolute-inset-zero ) {
+					position: absolute;
+					inset: 0;
+				}
+				:where( .centered-div ) {
+					position: relative;
+					left: 50%;
+					top: 50%;
+					transform: translate(-50%, -50%);
+				}
+				:where( .position-fixed ) {
+					position: fixed;
+				}
+			}
+			@layer optional-stuff {
+				:where( .canvas-wrapper ) {
+					overflow: hidden;
+				}
+				/* for this project, there's only one canvas on the webpage. therefore, we can use the element selector. No classes or IDs. */
+				:where( canvas ) {
+					/* border: 1px solid black; */
+					border: none;
+				}
+				:where( body ) {
+					/*overflow: hidden;*/
+				}
+			}
+		</style>
+	</head>
+	<body>
+		<!-- Unquoted attribute syntax doesn't work with spaces -->
+		<div class="canvas-wrapper position-absolute-inset-zero">
+			<canvas></canvas>
+		</div>
+		<!-- script before closing </body> convention -->
+		<script type="importmap">
+			{
+				"imports": {
+					"three": "https://cdn.jsdelivr.net/npm/three@0.181.2/build/three.module.js",
+					"three/addons/": "https://cdn.jsdelivr.net/npm/three@0.181.2/examples/jsm/"
+			  }
+			}
+		</script>
+		<script type="module">
+			// Imports
+			import * as THREE from 'three'
+			
+			import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+			import { TransformControls } from 'three/addons/controls/TransformControls.js';
+			// import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+			// Future work: switch all THREE.Line to Line2()
+			// import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
+			// import { Line2 } from 'three/addons/lines/Line2.js';
+			import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
+			
+			const { sin, cos, tan, PI, min, max, abs, random, atan2, sqrt, log } = Math;
+			
+			// Universal constants. Assuming units used are always
+			// meters for length, seconds for time, etc.
+			const mu0      = 1.25663706127 * 1e-6;
+			const epsilon0 = 8.8541878188 * 1e-12;
+			const coulombK = 1/( 4 * PI * epsilon0 );
+			
+			// DOM definitions
+			let canvasEl = document.querySelector('canvas')
+			let canvasWrapperEl = document.querySelector('.canvas-wrapper')
+			let frameCount = 0
+			
+			// Three.js variables
+			let camera, scene, renderer
+			let controls
+			
+			// Other variables
+			
+			// Width of main bounding box of the scene in "meters"
+			let sceneW = 10 // 10
+			// Farthest position field lines can reach before we
+			// stop computing them to save resources
+			let fieldLinesMaxX = sceneW * 3;
+			let fieldLinesMaxZ = sceneW * 3;
+			let fieldLinesMaxY = sceneW;
+			
+			
+			const fieldLineStepSize = 0.2; // 1.0 or 0.4 or 0.2
+			const fieldLineMaxVertices = 100 * 10 // try 50 or 100 (or 1000 if fieldLinesMaxX etc. are set)
+			// optional: render the last vertex and last line segment of field lines
+			// for aesthetics
+			let fieldLinesRenderLastVertex = true;
+			
+			// Huge performance boost! (fieldLinesNeedRecompute / fieldLinesRecomputeFrameSkip)
+			// - only recompute field line vertices
+			// - when the user changes the scene (like with TransformControls)
+			// - since, after all, this is magneto-**statics**
+			// Future work: make function to set `fieldLinesNeedRecompute=true` and
+			// fieldLinesRecompute_currentIndex=0 at the same time
+			let fieldLinesNeedRecompute = true;
+			let fieldLinesRecomputeFrameSkip = 10;
+			// fieldLinesRecomputePerFrame 10 ---> only compute
+			// up to 10 field lines at a time
+			let fieldLinesRecomputePerFrame = 500 // Try 10 or 300 (up to (fieldLinesGridWidth**3)*2)
+			let fieldLinesRecompute_currentIndex = 0
+			
+			// fieldLinesGridWidth==10 ---> 1000 total field lines
+			let fieldLinesGridWidth = 6 // 3, 4, or 6 (or 11 if fieldLinesRecomputePerFrame is set to a small value)
+			// optional: "jitter" the spawn points of the field lines
+			let fieldLinesGridUseJitter = true
+			
+			// Smallest number acceptable in denominator to avoid
+			// division by zero or related errors
+			let divisionByZeroThreshold = 1e-6;
+			let infiniteLineRenderDistance = 200;
+			
+			// Must be either E, B, or some other vector field.
+			// Choosing anything else will cause errors
+			let fieldToGraph = E
+			
+			let renderPointRadius = 0.1;
+			let renderWireChargeRadius  = renderPointRadius * 2/5;
+			let renderWireCurrentRadius = renderPointRadius * 4/5;
+			
+			// Materials
+			let positronMaterial = new THREE.MeshPhongMaterial( { color: 0xCCCC00, emissive: 0x000000, side: THREE.FrontSide, flatShading: true });
+			let electronMaterial = new THREE.MeshPhongMaterial( { color: 0x00CCCC, emissive: 0x000000, side: THREE.FrontSide, flatShading: true });
+			let positronLineMaterial = new THREE.LineBasicMaterial( { color: 0xCCCC00 } );
+			let electronLineMaterial = new THREE.LineBasicMaterial( { color: 0x00CCCC } );
+			let fieldLineMaterial = new THREE.LineBasicMaterial( { color: 0x0000ff } );
+			// Future work: shader material which indicates 1 Amp (Coulomb/second)
+			// current through it regardless of length
+			// using vertexColors:true like:
+			// https://threejs.org/examples/#webgl_buffergeometry_lines
+			// let wireMaterial = ;
+			// let pointChargeGeometry = new THREE.SphereGeometry(renderPointRadius, 10, 10)
+			
+			
+			// Simulation variables
+			// Every sim variable is either
+			// 1) a charge density distribution or
+			// 2) a current density distribution
+			// Other simulation parameters are derived
+			// as functions of these
+			let charges = []
+			let currents = []
+			let fieldLines = []
+			
+			const gui = new GUI();
+			let params = {};
+			
+			function initGUI () {
+				params = {
+					addPositivePointCharge: function() {
+						charges.push(createPointCharge(
+							new THREE.Vector3(0, 0, 0),
+							1
+						))
+						addChargesToScene()
+					},
+					addNegativePointCharge: function() {
+						charges.push(createPointCharge(
+							new THREE.Vector3(0, 0, 0),
+							-1
+						))
+						addChargesToScene()
+					},
+					addPositiveLineSegmentCharge: function() {
+						charges.push(createLineSegmentCharge(
+							new THREE.Vector3(0, 0, 0),
+							new THREE.Vector3(3, 0, 0),
+							1
+						))
+						addChargesToScene()
+					},
+					addNegativeLineSegmentCharge: function() {
+						charges.push(createLineSegmentCharge(
+							new THREE.Vector3(0, 0, 0),
+							new THREE.Vector3(3, 0, 0),
+							-1
+						))
+						addChargesToScene()
+					},
+					removeAllChargesAndCurrents: removeAllChargesAndCurrents
+				}
+				gui.add(params, 'addPositivePointCharge').name('Add positive point charge')
+				gui.add(params, 'addNegativePointCharge').name('Add negative point charge')
+				gui.add(params, 'addPositiveLineSegmentCharge').name('Add positive line segment charge')
+				gui.add(params, 'addNegativeLineSegmentCharge').name('Add negative line segment charge')
+				gui.add(params, 'removeAllChargesAndCurrents').name('Reset scene')
+			}
+			
+			
+			// User-editable function! Feel free to modify
+			// addChargesCurrentsAndFieldLinesToArrays()
+			// to change the initial scene however you like!
+			function addChargesCurrentsAndFieldLinesToArrays () {
+				// fieldLines.push( createFildLine(new THREE.Vector3(0, 3, 0)) )
+				for (let ox=0; ox<fieldLinesGridWidth; ++ox) {
+					for (let oy=0; oy<fieldLinesGridWidth; ++oy) {
+						for (let oz=0; oz<fieldLinesGridWidth; ++oz) {
+							let jitterX = 0, jitterY = 0, jitterZ = 0;
+							
+							if (fieldLinesGridUseJitter) {
+								jitterX = Math.random();
+								jitterY = Math.random();
+								jitterZ = Math.random();
+							}
+							let theInitialPos = new THREE.Vector3(
+								((ox+jitterX)/(fieldLinesGridWidth-1) - 0.5) * sceneW,
+								((oy+jitterY)/(fieldLinesGridWidth-1) - 0.5) * sceneW,
+								((oz+jitterZ)/(fieldLinesGridWidth-1) - 0.5) * sceneW
+							)
+								
+							fieldLines.push(
+								createFildLine(
+									theInitialPos,
+									false // move forwards
+								)
+							)
+							fieldLines.push(
+								createFildLine(
+									theInitialPos,
+									true // move backwards
+								)
+							)
+						}
+					}
+				}
+				
+				charges.push(createPointCharge(
+					new THREE.Vector3(3, 0, 0),
+					1
+				))
+				
+				charges.push(createPointCharge(
+					new THREE.Vector3(-3, 0, 0),
+					-1
+				))
+				
+				charges.push(createLineSegmentCharge(
+					new THREE.Vector3(0, 1, 0),
+					new THREE.Vector3(3, 1, 0),
+					1
+				))
+				
+				charges.push(createLineSegmentCharge(
+					new THREE.Vector3(0, 1, 2),
+					new THREE.Vector3(3, 1, 2),
+					-1
+				))
+				
+				// currents.push(createInfiniteLineCurrent(
+				// 	new THREE.Vector3(1, 2, 0),
+				// 	1 // Amps
+				// ))
+				// currents.push(createInfiniteLineCurrent(
+				// 	new THREE.Vector3(0, 3, 0),
+				// 	1 // Amps
+				// ))
+				// currents.push(createInfiniteLineCurrent(
+				// 	new THREE.Vector3(0, 4, 0),
+				// 	-1 // Amps
+				// ))
+			}
+			
+			function removeAllChargesAndCurrents () {
+				for (let i=0; i<charges.length; ++i) {
+					scene.remove( charges[i].transformControls.getHelper() );
+					scene.remove( charges[i].mesh )
+				}
+				charges = [];
+				for (let i=0; i<currents.length; ++i) {
+					scene.remove( currents[i].transformControls.getHelper() );
+					scene.remove( currents[i].mesh )
+				}
+				currents = [];
+				fieldLinesNeedRecompute = true;
+				fieldLinesRecompute_currentIndex = 0;
+			}
+			
+			// Vector fields
+			function V (s, Vtotal=0) {
+				// V(s) : R^3 --> R is electric potential at point s
+				Vtotal=0
+				
+				for (let i=0; i<charges.length; ++i) {
+					if (charges[i].type == "point") {
+						// Point charge
+						// V = k * q/r
+						Vtotal += coulombK * charges[i].charge / sqrt(
+							(s.x - charges[i].mesh.position.x) ** 2 +
+							(s.y - charges[i].mesh.position.y) ** 2 +
+							(s.z - charges[i].mesh.position.z) ** 2
+						);
+					}
+					else if ( charges[i].type == "linesegment" ) {
+						let mesh = charges[i].mesh;
+						let posAttr = charges[i].mesh.geometry.getAttribute('position')
+						let pos0 = new THREE.Vector3().fromBufferAttribute(posAttr, 0)
+						let pos1 = new THREE.Vector3().fromBufferAttribute(posAttr, 1)
+						let p1 = pos0; // pass by reference (not pass by value / clone)
+						let p2 = pos1; // same object p2===pos1
+						p1.add( mesh.position )
+						p2.add( mesh.position )
+						Vtotal += V_lineseg(s, p1, p2, charges[i].chargeDensity);
+					}
+				}
+				return Vtotal
+			}
+			function V_lineseg (s, p1, p2, chargeDensity) {
+				// http://hyperphysics.phy-astr.gsu.edu/hbase/electric/potlin.html#c1
+				// ∫ k⋅dq/r = kλ⋅ln( b+sqrt(b²+d²) / -a+sqrt(a²+d²) )
+				// where x1, x2 are the x-coords of the line segment inside the x-axis,
+				// d=sy²+sz², b=s.x-x2, -a=(s.x-x1)
+				let theDistSquared = (s.y-p1.y)**2 + (s.z-p1.z)**2
+				let x1 = p1.x
+				let x2 = p2.x
+				let b = s.x - x2
+				let a = -(s.x - x1)
+				return coulombK * chargeDensity * (
+					log(  b + sqrt(b*b + theDistSquared) ) -
+					log( -a + sqrt(a*a + theDistSquared) )
+				)
+			}
+			function E (s, Etotal=null) {
+				// Future work: include analytic (closed-form)
+				// expressions for computing electric field from
+				// charge density distribution directly instead
+				// of computing it numerically as gradient(V, s)
+				return gradient(V, s);
+			}
+			function B (s, Btotal=null) {
+				if (!(Btotal instanceof THREE.Vector3)) {
+					Btotal = new THREE.Vector3()
+				}
+				Btotal.set(0, 0, 0)
+				for (let i=0; i<currents.length; ++i) {
+						if (currents[i].type == "line +z") {
+							let p = currents[i].mesh.position
+							// let pClosest = new THREE.Vector3(
+							// 	p.x, p.y, s.z
+							// )
+							let r = (s.x - p.x)**2 + (s.y - p.y)**2;
+							let rHat = new THREE.Vector3(
+								(s.x - p.x)/r,
+								(s.y - p.y)/r,
+								0
+							)
+							
+							
+							let zHat = new THREE.Vector3(0, 0, 1)
+							// .crossVectors() stores in-place
+							// .cross() creates a new THREE.Vector3
+							let Bhat = zHat.cross(rHat)
+							
+							// B = mu0 * I/(2πr) * Bhat
+							Btotal.addScaledVector(
+								Bhat,
+								currents[i].current
+							)
+						}
+				}
+				// Btotal.add(new THREE.Vector3(s.x, s.y, s.z))
+				// Btotal.set(s.x, s.y, s.z)
+				return Btotal;
+			}
+			function H (s, inPlaceReturnLocation=null) {
+				// if (!(inPlaceReturnLocation instanceof THREE.Vector3)) {
+				// 	inPlaceReturnLocation = new THREE.Vector3()
+				// 	s = s.clone()
+				// }
+				// // inPlaceReturnLocation = B(x, y, z) / mu0;
+				// // return inPlaceReturnLocation;
+			}
+			// S = E × H
+			function poyntingVector (s, inPlaceReturnLocation=null) {
+				// if (!(inPlaceReturnLocation instanceof THREE.Vector3)) {
+				// 	inPlaceReturnLocation = new THREE.Vector3()
+				// 	// s = s.clone()
+				// }
+				// inPlaceReturnLocation = cross(E(x, y, z), H(x, y, z));
+				// return inPlaceReturnLocation;
+			}
+			
+			// gradient (symbol: nabla, inverse is finding scalar potential)
+			function gradient (f, s, infinitesimal=1e-6, inPlaceReturnLocation=null) {
+				if (!(inPlaceReturnLocation instanceof THREE.Vector3)) {
+					inPlaceReturnLocation = new THREE.Vector3(0, 0, 0)
+				}
+				let f_at_s = f(s)
+				let s_clone = s.clone()
+				s_clone.x += infinitesimal
+				let f_at_sx   = f(s_clone)
+				s_clone.x = s.x
+				//
+				s_clone.y += infinitesimal
+				let f_at_sy   = f(s_clone)
+				s_clone.y = s.y
+				//
+				s_clone.z += infinitesimal
+				let f_at_sz   = f(s_clone)
+				s_clone.z = s.z
+				//
+				inPlaceReturnLocation.set(
+					(f_at_sx - f_at_s)/infinitesimal,
+					(f_at_sy - f_at_s)/infinitesimal,
+					(f_at_sz - f_at_s)/infinitesimal
+				)
+				return inPlaceReturnLocation;
+			}
+			
+			// curl, aka vorticity (inverse is finding vector potential)
+			function curl (f, s, infinitesimal=1e-6) {}
+			function divergence (f, s, infinitesimal=1e-6) {}
+			
+			// point charge (monopole), wire/line segment charge,
+			// surface charge, volume charge density distribution
+			// electric dipole (two point charges),
+			// point-shaped electric dipole,
+			// wires, surfaces, and volme polarization density distribution
+			function createPointCharge (p, charge) {
+				let mesh = new THREE.Mesh(new THREE.SphereGeometry(renderPointRadius, 10, 10), charge > 0 ? positronMaterial : electronMaterial)
+				mesh.position.set( p.x, p.y, p.z )
+				
+				return {
+					type: "point",
+					charge: charge,
+					mesh: mesh,
+					transformControls: createTransformControls(mesh)
+				}
+			}
+			
+			function createLineSegmentCharge (p1, p2, chargeDensity) {
+				// count = number of vertices
+				// n vertices --> (n-1) line segments between them
+				let count = 2;
+				let itemSize = 3;
+				let posAttr = new THREE.BufferAttribute(
+					new Float32Array( count * itemSize ),
+					itemSize
+				)
+				
+				posAttr.setXYZ(0, 0, 0, 0)
+				posAttr.setXYZ(1, p2.x - p1.x, p2.y - p1.y, p2.z - p1.z)
+				
+				// console.log(posAttr.array)
+				
+				let geometry = new THREE.BufferGeometry()
+				geometry.setAttribute( 'position', posAttr );
+				
+				let mesh = new THREE.Line(geometry, chargeDensity >= 0 ? positronLineMaterial : electronLineMaterial )
+				
+				mesh.position.set( p1.x, p1.y, p1.z )
+				
+				return {
+					type: "linesegment",
+					chargeDensity: chargeDensity,
+					mesh: mesh,
+					transformControls: createTransformControls(mesh)
+				}
+			}
+			
+			// Uniformly charged polygon of uniformly charged line segments
+			function createPolygonCharge () {}
+			
+			function createInfiniteLineCurrent (p, current, direction="line +z") {
+				
+				// count = number of vertices
+				// n vertices --> (n-1) line segments between them
+				let count = 2;
+				let itemSize = 3;
+				let posAttr = new THREE.BufferAttribute(
+					new Float32Array( count * itemSize ),
+					itemSize
+				)
+				
+				posAttr.setXYZ(0, 0, 0, -infiniteLineRenderDistance)
+				posAttr.setXYZ(1, 0, 0,  infiniteLineRenderDistance)
+				
+				let geometry = new THREE.BufferGeometry()
+				geometry.setAttribute( 'position', posAttr );
+				
+				let mesh = new THREE.Line(geometry, electronLineMaterial )
+				
+				mesh.position.set( p.x, p.y, p.z )
+				return {
+					type: "line +z",
+					current: current,
+					mesh: mesh,
+					transformControls: createTransformControls(mesh)
+				}
+			}
+			
+			function createClosedPolygonCurrent () {}
+			
+			// A polygon-like shape, but the first and last
+			// vertex each have infinite rays shooting off
+			// to infinity in some direction
+			// examples: infinite line, y=abs(x) 'V'-shape,
+			// approximate upper-half hyperbola
+			function createInfiniteRayEndedPolygonCurrent () {}
+			
+			function createTransformControls (mesh) {
+				let tcontrols = new TransformControls( camera, renderer.domElement );
+				// tcontrols.mode = 'translate'; // translate, rotate, scale
+				tcontrols.size = 0.5;
+				tcontrols.attach( mesh );
+				tcontrols.enabled = true;
+				tcontrols.addEventListener( 'dragging-changed', ( event ) => {
+					controls.enabled = ! event.value;
+				});
+				tcontrols.addEventListener( 'objectChange', (event) => {
+					fieldLinesNeedRecompute = true;
+					fieldLinesRecompute_currentIndex = 0;
+				});
+				// Future work
+				// 1) prevent bug where multiple TransformControls can be
+				//    selected and dragged by mouse at the same time
+				//    getting "clumped together"
+				// 2) set tcontrols.minX, minY, minZ = -sceneW,
+				//    set tcontrols.maxX, maxY, maxZ = +sceneW;
+				return tcontrols;
+			}
+			
+			function syncPosArrayToPosAttr (fieldLine, optionalUpperBound=fieldLineMaxVertices) {
+				let posArray = fieldLine.posArray
+				let mesh = fieldLine.mesh
+				let posAttr = fieldLine.mesh.geometry.getAttribute('position')
+				let count = posAttr.count
+				let itemSize = posAttr.itemSize // 3
+				let otherUpperBound = min(
+					optionalUpperBound,
+					fieldLine.number_of_computed_vertices_until_diverged
+				)
+				for (let i=0; i<min( count, posArray.length, otherUpperBound ); ++i) {
+					posAttr.setXYZ(
+						i,
+						posArray[i].x,
+						posArray[i].y,
+						posArray[i].z
+					)
+				}
+			}
+			// create a forward field line with initial position
+			function createFildLine (initialPos, marchBackwards=false) {
+				// count: Note that count=n vertices will have
+				// (n-1) line segments between them
+				let itemSize = 3;
+				let count = fieldLineMaxVertices;
+				let posAttr = new THREE.BufferAttribute(
+					new Float32Array( count * itemSize ),
+					itemSize
+				)
+				
+				// When initializing, we use fieldLineMaxVertices as the
+				// upper bound. But later in the code we will use
+				// number_of_computed_vertices_until_diverged
+				// as the upper bound
+				let posArray = []
+				for (let i=0; i<fieldLineMaxVertices; ++i) {
+					posArray.push(
+						new THREE.Vector3(initialPos.x + i, initialPos.y, initialPos.z)
+					)
+				}
+				
+				let geometry = new THREE.BufferGeometry()
+				geometry.setAttribute( 'position', posAttr );
+				
+				return {
+					type: "fieldline",
+					marchBackwards: marchBackwards,
+					initialPos: initialPos,
+					posArray: posArray,
+					mesh: new THREE.Line(geometry, fieldLineMaterial),
+					number_of_computed_vertices_until_diverged: fieldLineMaxVertices
+				}
+			}
+			
+			function addChargesToScene () {
+				for (let i=0; i<charges.length; ++i) {
+					scene.add( charges[i].mesh )
+					scene.add( charges[i].transformControls.getHelper() );
+				}
+				fieldLinesNeedRecompute = true;
+				fieldLinesRecompute_currentIndex = 0;
+			}
+			function addCurrentsToScene () {
+				for (let i=0; i<currents.length; ++i) {
+					scene.add( currents[i].mesh )
+					scene.add( currents[i].transformControls.getHelper() );
+				}
+				fieldLinesNeedRecompute = true;
+				fieldLinesRecompute_currentIndex = 0;
+			}
+			function addFieldLinesToScene () {
+				for (let i=0; i<fieldLines.length; ++i) {
+					scene.add( fieldLines[i].mesh )
+				}
+				fieldLinesNeedRecompute = true;
+				fieldLinesRecompute_currentIndex = 0;
+			}
+			
+			function addLightsToScene () {
+				let lights = [];
+				lights[ 0 ] = new THREE.DirectionalLight( 0xffffff, 3 );
+				lights[ 1 ] = new THREE.DirectionalLight( 0xffffff, 3 );
+				lights[ 2 ] = new THREE.DirectionalLight( 0xffffff, 3 );
+				lights[ 0 ].position.set( 0, 200, 0 );
+				lights[ 1 ].position.set( 100, 200, 100 );
+				lights[ 2 ].position.set( - 100, - 200, - 100 );
+				for (let i=0; i<lights.length; ++i) { scene.add(lights[i]) }
+			}
+			
+			function updateFieldLinesInScene () {
+				// Best practice for updating vertex position buffer attributes:
+				// https://threejs.org/manual/#en/how-to-update-things
+				for (let loopIndex=0; loopIndex<fieldLinesRecomputePerFrame; ++loopIndex) {
+					// If we increment ++fieldLinesRecompute_currentIndex
+					// past the last field line (fieldLines.length-1),
+					// then we have successfully updated all the field lines
+					// and can tell the simulation to stop updating the field
+					// lines until the user makes a change to the scene again
+					if (fieldLinesRecompute_currentIndex >= fieldLines.length) {
+						fieldLinesRecompute_currentIndex = 0
+						fieldLinesNeedRecompute = false;
+					}
+					// make sure fieldLinesRecompute_currentIndex is within array bounds!
+					if (!(fieldLinesRecompute_currentIndex >= 0 &&
+						  fieldLinesRecompute_currentIndex < fieldLines.length)) {
+						fieldLinesRecompute_currentIndex = 0;
+					}
+					
+					// use 'i' as a shorthand
+					let i = fieldLinesRecompute_currentIndex;
+					
+					let fieldLine = fieldLines[i]
+					
+					let mesh = fieldLines[i].mesh
+					let posAttr = fieldLines[i].mesh.geometry.getAttribute('position')
+					let posArray = fieldLines[i].posArray
+					let count = posAttr.count
+					let itemSize = posAttr.itemSize
+					let marchDirection = fieldLine.marchBackwards ? -1 : 1;
+					
+					// posArray.length should be equal to count
+					let stepJprev = new THREE.Vector3(0, 0, 0);
+					fieldLine.number_of_computed_vertices_until_diverged = 0
+					label_loopJ: for (let j=0; j<posArray.length; ++j) {
+						if (j == 0) {
+							posArray[j].copy( fieldLine.initialPos )
+						}
+						if (j >= 1) {
+							// s_i+1 = s_i + (dX/dt) * deltaT
+							posArray[j].copy( posArray[j-1] )
+							let vector_field_at_s = fieldToGraph(posArray[j])
+							let stepJ = vector_field_at_s;// Es.clone()
+							// normalize stepJ, so our field line march
+							// step has a constant length for better
+							// simulation speed, stability, and visual
+							// quality
+							stepJ.normalize()
+							
+							stepJ.multiplyScalar(fieldLineStepSize * marchDirection)
+							posArray[j].add( stepJ )
+							if (j >= 2) {
+								// stop iterating if the field makes a sharp (≥90°) turn
+								if (stepJ.dot(stepJprev) <= 0) {
+									break label_loopJ;
+								}
+							}
+							// stop iterating if the field line goes out of bounds of fieldLinesMaxX etc.
+							if (abs(posArray[j].x) > fieldLinesMaxX ||
+							    abs(posArray[j].y) > fieldLinesMaxY ||
+								abs(posArray[j].z) > fieldLinesMaxZ) {
+								break label_loopJ;
+							}
+							
+							// Future work: add detection if a field line
+							// makes a closed loop, with its position and
+							// "velocity" (stepJ) coming within a threshold
+							// of its initial position
+							
+							stepJprev.copy(stepJ)
+						}
+						fieldLine.number_of_computed_vertices_until_diverged = j;
+					}
+					// optional: clip off last iteration
+					if (!fieldLinesRenderLastVertex) {
+						fieldLine.number_of_computed_vertices_until_diverged = max(
+							fieldLine.number_of_computed_vertices_until_diverged - 1,
+							0
+						)
+					}
+					// setDrawRange(0, 1) doesn't render, but
+					// setDrawRange(0, 2) renders because you need
+					// n vertices to get (n-1) line segments between them
+					fieldLine.mesh.geometry.setDrawRange(
+						0,
+						fieldLine.number_of_computed_vertices_until_diverged
+					)
+					
+					syncPosArrayToPosAttr(
+						fieldLines[i],
+						fieldLine.number_of_computed_vertices_until_diverged
+					)
+					
+					fieldLines[i].mesh.geometry.getAttribute('position').needsUpdate = true
+					++fieldLinesRecompute_currentIndex;
+				}
+			}
+			
+			// resize callback function
+			function onResize () {
+				camera.aspect = canvasWrapperEl.clientWidth / canvasWrapperEl.clientHeight;
+				camera.updateProjectionMatrix();
+				renderer.setSize(canvasWrapperEl.clientWidth, canvasWrapperEl.clientHeight)
+				// re-render to canvas on resize (helps prevent choppy animation)
+				renderer.render( scene, camera );
+			}
+			
+			function initEventListeners () {
+				// similar to window.onresize
+				new ResizeObserver(onResize).observe(canvasWrapperEl)
+			}
+			
+			function animate () {
+				renderer.render(scene, camera)
+				controls.update()
+				//
+				if (fieldLinesNeedRecompute &&
+					frameCount % fieldLinesRecomputeFrameSkip === 0) {
+					// call updateFieldLinesInScene()
+					// until it sets fieldLinesNeedRecompute = false;
+					updateFieldLinesInScene()
+				}
+				frameCount += 1;
+			}
+			
+			function initRenderer () {
+				// Future work: use WebGPURenderer, but for now WebGL works fine
+				renderer = new THREE.WebGLRenderer({ canvas: canvasEl })
+				renderer.setPixelRatio( window.devicePixelRatio );
+				// renderer.setSize( window.innerWidth, window.innerHeight );
+				// renderer.setSize(canvasWrapperEl.clientWidth, canvasWrapperEl.clientHeight)
+				renderer.setSize(200, 200)
+				
+				// setInterval, requestAnimationFrame, setInterval,
+				// and renderer.setAnimationLoop are all usable
+				renderer.setAnimationLoop( animate );
+			}
+			
+			function initOrbitControls () {
+				controls = new OrbitControls( camera, renderer.domElement );
+				controls.enableDamping = true;
+				// need minDistance because if camera gets position
+				// set to zero, then OrbitControls breaks
+				// controls.minDistance = 10;
+				controls.minDistance = 1.0;
+				// controls.minDistance = 3;
+				controls.maxDistance = sceneW * 20; // sceneW*4;
+				controls.target.set(0, 0, 0);
+				controls.update()
+			}
+			
+			function init () {
+				
+				// canvasWrapperEl.clientWidth instead of window.innerWidth
+				camera = new THREE.PerspectiveCamera( 40, canvasWrapperEl.clientWidth / canvasWrapperEl.clientHeight, 1, 10000 );
+				camera.near = 1e-6
+				camera.far = 1e9;
+				
+				// z-position of camera <0 means that +x is right, +y is up,
+				// and +z is towards the viewer
+				camera.position.set(0, 5, +10)
+				camera.position.multiplyScalar( sceneW/10 )
+				
+				
+				initRenderer()
+				
+				scene = new THREE.Scene()
+				scene.background = new THREE.Color( 0xffffff );
+				scene.add( new THREE.GridHelper(sceneW, sceneW) )
+				
+				// In order for TransformControls to work, initRenderer()
+				// must be called before
+				// addChargesCurrentsAndFieldLinesToArrays()
+				addChargesCurrentsAndFieldLinesToArrays()
+				
+				// addChargesCurrentsAndFieldLinesToArrays()
+				// must be called before addChargesToScene()
+				addChargesToScene()
+				addCurrentsToScene()
+				// addArrowsToScene()
+				addFieldLinesToScene()
+				addLightsToScene()
+				
+				initOrbitControls()
+				initGUI()
+				
+				initEventListeners()
+			}
+			
+			init();
+		</script>
+	</body>
+</html>
