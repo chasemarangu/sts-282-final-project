@@ -7,7 +7,7 @@ The objective of this project was to create a visualization tool which makes it 
 
  ## Using this code
 
- 1) Open `index.html` in your favorite web browser
+ 1) Open `index.html` in your favorite web browser (or visit <a href=https://chasemarangu.github.io/sts-282-final-project/>https://chasemarangu.github.io/sts-282-final-project/</a>)
  2) Click the buttons in the GUI to add different electric charge and current distributions.
  3) Drag on the red, green, and blue arrows (Three.js TransformControls) to move any object in the scene and see what the resulting vector field looks like.
 
