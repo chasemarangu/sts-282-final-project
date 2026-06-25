@@ -10,8 +10,33 @@ Code based on https://threejs.org/examples/
 -->
 
 <!Doctype html>
-<html>
+<!--
+Edited: 2026 06 24 10:21pm PDT
+The HTML lang attribute includes a two-letter ISO 639 language code which
+can be optionally followed by a hyphen and an ISO 3166 country code
+Sources:
+- https://stackoverflow.com/questions/11318961/what-is-the-difference-between-html-lang-en-and-html-lang-en-us
+- https://www.w3.org/TR/html4/struct/dirlang.html#langcodes
+ -->
+<html lang="en-US">
+<!-- End of edited 2026 06 24 10:21pm PDT -->
 	<head>
+		<!-- Edited: 2026 06 24 10:25pm PDT -->
+		<meta charset="UTF-8">
+		<!--
+		- Meta charset should be a case-insensitive "utf-8" becuase that is
+		  the only valid encoding for HTML5 documents
+		- It also has to be located within the first 1024 bytes
+		  which is why I've moved this comment block below it
+		Source: https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/meta
+		Also note that auto-closing tags like img and meta don't need the slash at the end
+		e.g. `<img src="logo.jpg"/>` and `<img src="logo.jpg">` do the same thing
+		End of edited 2026 06 24 10:25pm PDT
+		
+		This HTML was checked using the W3C Validator and CSS Validator
+		- https://validator.w3.org/
+		- https://jigsaw.w3.org/css-validator/validator
+		-->
 		<title>PHYS/STS/ENST 282 Final Project</title>
 		<!-- style before closing </head> to prevent flash of unstyled content (FOUC) -->
 		<style>
@@ -67,8 +92,8 @@ Code based on https://threejs.org/examples/
 		<script type="importmap">
 			{
 				"imports": {
-					"three": "https://cdn.jsdelivr.net/npm/three@0.181.2/build/three.module.js",
-					"three/addons/": "https://cdn.jsdelivr.net/npm/three@0.181.2/examples/jsm/"
+					"three": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.module.js",
+					"three/addons/": "https://cdn.jsdelivr.net/npm/three@0.184.0/examples/jsm/"
 			  }
 			}
 		</script>
@@ -345,11 +370,18 @@ Code based on https://threejs.org/examples/
 			
 			function removeAllChargesAndCurrents () {
 				for (let i=0; i<charges.length; ++i) {
+					// Added: 2026 06 24 10:01pm PDT
+					// Important: for recent versions of Three.js, we need to
+					// call `transformControls.detach()` before `.remove()` them
+					// from the scene to prevent console errors
+					charges[i].transformControls.detach()
+					// End of added 2026 06 24 10:01pm PDT
 					scene.remove( charges[i].transformControls.getHelper() );
 					scene.remove( charges[i].mesh )
 				}
 				charges = [];
 				for (let i=0; i<currents.length; ++i) {
+					currents[i].transformControls.detach()
 					scene.remove( currents[i].transformControls.getHelper() );
 					scene.remove( currents[i].mesh )
 				}
@@ -636,6 +668,12 @@ Code based on https://threejs.org/examples/
 				tcontrols.attach( mesh );
 				tcontrols.enabled = true;
 				tcontrols.addEventListener( 'dragging-changed', ( event ) => {
+					// Added: 2026 06 24 10:02pm PDT
+					// Important: we use the dragging-changed event listener to
+					// ensure that when you click-drag the TransformControls,
+					// the OrbitControls does not rotate the world along
+					// with them
+					// End of added 2026 06 24 10:02pm PDT
 					controls.enabled = ! event.value;
 				});
 				tcontrols.addEventListener( 'objectChange', (event) => {
@@ -867,7 +905,12 @@ Code based on https://threejs.org/examples/
 			
 			function initRenderer () {
 				// Future work: use WebGPURenderer, but for now WebGL works fine
-				renderer = new THREE.WebGLRenderer({ canvas: canvasEl })
+				renderer = new THREE.WebGLRenderer({ canvas: canvasEl,
+					// Added: 2026 06 24 10:04pm PDT
+					// Note: "logarithmicDepthBuffer: true" is important to prevent <dfn>z-fighting</dfn>
+					logarithmicDepthBuffer: true
+					// End of added 2026 06 24 10:04pm PDT
+				})
 				renderer.setPixelRatio( window.devicePixelRatio );
 				// renderer.setSize( window.innerWidth, window.innerHeight );
 				// renderer.setSize(canvasWrapperEl.clientWidth, canvasWrapperEl.clientHeight)
@@ -909,6 +952,14 @@ Code based on https://threejs.org/examples/
 				scene = new THREE.Scene()
 				scene.background = new THREE.Color( 0xffffff );
 				scene.add( new THREE.GridHelper(sceneW, sceneW) )
+				
+				// Added: 2026 06 24 10:05pm PDT
+				// I learned about the fog from
+				// https://threejs.org/examples/#webgl_geometry_text
+				// It seems to work better with first person
+				// cameras than with OrbitControls
+				scene.fog = new THREE.Fog( 0xFFFFFF, 10 * 4, 15 * 14 );
+				// End of added 2026 06 24 10:05pm PDT
 				
 				// In order for TransformControls to work, initRenderer()
 				// must be called before
